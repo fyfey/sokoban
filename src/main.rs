@@ -9,7 +9,7 @@ mod map;
 mod resources;
 mod systems;
 
-use crate::constants::{TILE_WIDTH, MULTIPLIER};
+use crate::constants::{TILE_WIDTH, MULTIPLIER, TEXT_SIZE, TEXT_PADDING};
 use crate::components::*;
 use crate::map::*;
 use crate::resources::*;
@@ -34,13 +34,18 @@ impl event::EventHandler for Game {
             };
             is.run_now(&self.world);
         }
+	// Run gameplay state system
+        {
+            let mut gss = GameplayStateSystem {};
+            gss.run_now(&self.world);
+        }
         Ok(())
     }
 
     fn draw(&mut self, context: &mut Context) -> GameResult {
         // Render game entities
         {
-            let mut rs = RenderingSystem { context };
+            let mut rs = RenderingSystem { context, cols: self.cols, rows: self.rows };
             rs.run_now(&self.world);
         }
         Ok(())
@@ -88,7 +93,7 @@ pub fn main() -> GameResult {
         .window_setup(conf::WindowSetup::default().title("Rust Sokoban!"))
         .window_mode(
             conf::WindowMode::default()
-                .dimensions(cols as f32 * TILE_WIDTH * MULTIPLIER, rows as f32 * TILE_WIDTH * MULTIPLIER),
+                .dimensions(cols as f32 * TILE_WIDTH * MULTIPLIER, ((rows as f32 * TILE_WIDTH) + (TEXT_SIZE + TEXT_PADDING) * 2.0) * MULTIPLIER),
         )
         .add_resource_path(path::PathBuf::from("./resources"));
 
