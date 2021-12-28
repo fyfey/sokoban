@@ -1,14 +1,17 @@
 use ggez;
-use ggez::graphics;
 use ggez::event::{KeyCode, KeyMods};
+use ggez::graphics;
 use ggez::graphics::DrawParam;
 use ggez::graphics::Image;
 use ggez::nalgebra as na;
 use ggez::{conf, event, Context, GameResult};
+use specs::world::Index;
+use specs::NullStorage;
 use specs::{
-    join::Join, Builder, Component, Read, ReadStorage, RunNow, System, VecStorage, World, WorldExt,
-    Write, WriteStorage,
+    join::Join, Builder, Component, Entities, Read, ReadStorage, RunNow, System, VecStorage, World,
+    WorldExt, Write, WriteStorage,
 };
+use std::collections::HashMap;
 
 use std::path;
 
@@ -53,23 +56,82 @@ impl<'a> System<'a> for RenderingSystem<'a> {
     }
 }
 
-pub struct InputSystem {}
+pub struct InputSystem {
+    cols: u8,
+    rows: u8,
+}
 
 impl<'a> System<'a> for InputSystem {
     // Data
     type SystemData = (
         Write<'a, InputQueue>,
+        Entities<'a>,
         WriteStorage<'a, Position>,
         ReadStorage<'a, Player>,
+        ReadStorage<'a, Movable>,
+        ReadStorage<'a, Immovable>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (mut input_queue, mut positions, players) = data;
+        let (mut input_queue, entities, mut positions, players, movables, immovables) = data;
+        let mut to_move = Vec::new();
 
-        for (position, _player) in (&mut positions, &players).join() {
+        for (position, _player) in (&positions, &players).join() {
             // Get the first key pressed
             if let Some(key) = input_queue.keys_pressed.pop() {
-                // Apply the key to the position
+                let mov: HashMap<(u8, u8), Index> = (&entities, &movables, &positions)
+                    .join()
+                    .map(|t| ((t.2.x, t.2.y), t.0.id()))
+                    .collect::<HashMap<_, _>>();
+                let immov: HashMap<(u8, u8), Index> = (&entities, &immovables, &positions)
+                    .join()
+                    .map(|t| ((t.2.x, t.2.y), t.0.id()))
+                    .collect::<HashMap<_, _>>();
+
+                // Now iterate through current position to the end of the map
+                // on the correct axis and check what needs to move.
+                let (start, end, is_x) = match key {
+                    KeyCode::Up => (position.y, 0, false),
+                    KeyCode::Down => (position.y, self.rows, false),
+                    KeyCode::Left => (position.x, 0, true),
+                    KeyCode::Right => (position.x, self.cols, true),
+                    _ => continue,
+                };
+                let range = if start < end {
+                    (start..=end).collect::<Vec<_>>()
+                } else {
+                    (end..=start).rev().collect::<Vec<_>>()
+                };
+
+                for x_or_y in range {
+                    let pos = if is_x {
+                        (x_or_y, position.y)
+                    } else {
+                        (position.x, x_or_y)
+                    };
+
+                    // find a movable
+                    // if it exists, we try to move it and continue
+                    // if it doesn't exist, we continue and try to find an immovable instead
+                    match mov.get(&pos) {
+                        Some(id) => to_move.push((key, id.clone())),
+                        None => {
+                            // find an immovable
+                            // if it exists, we need to stop and not move anything
+                            // if it doesn't exist, we stop because we found a gap
+                            match immov.get(&pos) {
+                                Some(_id) => to_move.clear(),
+                                None => break,
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Now actually move what needs to be moved
+        for (key, id) in to_move {
+            let position = positions.get_mut(entities.entity(id));
+            if let Some(position) = position {
                 match key {
                     KeyCode::Up => position.y -= 1,
                     KeyCode::Down => position.y += 1,
@@ -81,7 +143,6 @@ impl<'a> System<'a> for InputSystem {
         }
     }
 }
-
 
 // Components
 #[derive(Debug, Component, Clone, Copy)]
@@ -114,18 +175,31 @@ pub struct Box {}
 #[storage(VecStorage)]
 pub struct BoxSpot {}
 
+#[derive(Component, Default)]
+#[storage(NullStorage)]
+pub struct Movable;
+
+#[derive(Component, Default)]
+#[storage(NullStorage)]
+pub struct Immovable;
+
 // This struct will hold all our game state
 // For now there is nothing to be held, but we'll add
 // things shortly.
 struct Game {
     world: World,
+    rows: u8,
+    cols: u8,
 }
 
 impl event::EventHandler for Game {
     fn update(&mut self, _context: &mut Context) -> GameResult {
         // Run input system
         {
-            let mut is = InputSystem {};
+            let mut is = InputSystem {
+                cols: self.cols,
+                rows: self.rows,
+            };
             is.run_now(&self.world);
         }
         Ok(())
@@ -162,6 +236,8 @@ pub fn register_components(world: &mut World) {
     world.register::<Wall>();
     world.register::<Box>();
     world.register::<BoxSpot>();
+    world.register::<Movable>();
+    world.register::<Immovable>();
 }
 
 // Create a wall entity
@@ -173,6 +249,7 @@ pub fn create_wall(world: &mut World, position: Position) {
             path: "/images/wall.png".to_string(),
         })
         .with(Wall {})
+        .with(Immovable)
         .build();
 }
 
@@ -194,6 +271,7 @@ pub fn create_box(world: &mut World, position: Position) {
             path: "/images/box.png".to_string(),
         })
         .with(Box {})
+        .with(Movable)
         .build();
 }
 
@@ -216,9 +294,10 @@ pub fn create_player(world: &mut World, position: Position) {
             path: "/images/player.png".to_string(),
         })
         .with(Player {})
+        .with(Movable)
         .build();
 }
-pub fn load_map(world: &mut World, map_string: String) -> (i32, i32) {
+pub fn load_map(world: &mut World, map_string: String) -> (u8, u8) {
     // read all lines
     let rows: Vec<&str> = map_string.trim().split('\n').map(|x| x.trim()).collect();
     let mut columns: Vec<&str> = vec![];
@@ -259,11 +338,11 @@ pub fn load_map(world: &mut World, map_string: String) -> (i32, i32) {
         }
     }
 
-    return (rows.len() as i32, columns.len() as i32);
+    return (rows.len() as u8, columns.len() as u8);
 }
 
 // Initialize the level
-pub fn initialize_level(world: &mut World) -> (i32, i32) {
+pub fn initialize_level(world: &mut World) -> (u8, u8) {
     const MAP: &str = "
     N N W W W W W W
     W W W . . . . W
@@ -290,7 +369,6 @@ pub fn register_resources(world: &mut World) {
     world.insert(InputQueue::default())
 }
 
-
 pub fn main() -> GameResult {
     let mut world = World::new();
     register_components(&mut world);
@@ -300,13 +378,16 @@ pub fn main() -> GameResult {
     // Create a game context and event loop
     let context_builder = ggez::ContextBuilder::new("rust_sokoban", "sokoban")
         .window_setup(conf::WindowSetup::default().title("Rust Sokoban!"))
-        .window_mode(conf::WindowMode::default().dimensions(cols as f32 * TILE_WIDTH, rows as f32 * TILE_WIDTH))
+        .window_mode(
+            conf::WindowMode::default()
+                .dimensions(cols as f32 * TILE_WIDTH, rows as f32 * TILE_WIDTH),
+        )
         .add_resource_path(path::PathBuf::from("./resources"));
 
     let (context, event_loop) = &mut context_builder.build()?;
 
     // Create the game state
-    let game = &mut Game { world };
+    let game = &mut Game { world, rows, cols };
     // Run the main event loop
     event::run(context, event_loop, game)
 }
