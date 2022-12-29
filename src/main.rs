@@ -1,16 +1,23 @@
-use ggez::{conf, event::{self, KeyCode, KeyMods}, Context, GameResult};
-use specs::{RunNow, World, WorldExt};
+use crate::audio::initialize_sounds;
+use ggez::{
+    conf,
+    event::{self, KeyCode, KeyMods},
+    timer, Context, GameResult,
+};
+use specs::{Dispatcher, DispatcherBuilder, RunNow, World, WorldExt};
 use std::path;
 
+mod audio;
 mod components;
 mod constants;
 mod entities;
+mod events;
 mod map;
 mod resources;
 mod systems;
 
-use crate::constants::{TILE_WIDTH, MULTIPLIER, TEXT_SIZE, TEXT_PADDING};
 use crate::components::*;
+use crate::constants::{MULTIPLIER, TEXT_PADDING, TEXT_SIZE, TILE_WIDTH};
 use crate::map::*;
 use crate::resources::*;
 use crate::systems::*;
@@ -20,32 +27,46 @@ use crate::systems::*;
 // things shortly.
 struct Game {
     world: World,
+    dispatcher: Dispatcher<'static, 'static>,
     rows: u8,
     cols: u8,
 }
 
 impl event::EventHandler for Game {
-    fn update(&mut self, _context: &mut Context) -> GameResult {
-        // Run input system
+    fn update(&mut self, ctx: &mut Context) -> GameResult {
+        println!(
+            "[update] ticks: {}\tfps: {}\tdelta: {:?}",
+            timer::ticks(ctx),
+            timer::fps(ctx),
+            timer::delta(ctx)
+        );
+
+        self.dispatcher.dispatch(&mut self.world);
         {
-            let mut is = InputSystem {
-                cols: self.cols,
-                rows: self.rows,
-            };
-            is.run_now(&self.world);
+            let mut es = EventSystem { context: ctx };
+            es.run_now(&self.world);
         }
-	// Run gameplay state system
-        {
-            let mut gss = GameplayStateSystem {};
-            gss.run_now(&self.world);
-        }
+        self.world.maintain();
+        let mut time = self.world.write_resource::<Time>();
+        time.delta += timer::delta(ctx);
+
         Ok(())
     }
 
-    fn draw(&mut self, context: &mut Context) -> GameResult {
+    fn draw(&mut self, ctx: &mut Context) -> GameResult {
         // Render game entities
+        println!(
+            "[draw] ticks: {}\tfps: {}\tdelta: {:?}",
+            timer::ticks(ctx),
+            timer::fps(ctx),
+            timer::delta(ctx)
+        );
         {
-            let mut rs = RenderingSystem { context, cols: self.cols, rows: self.rows };
+            let mut rs = RenderingSystem {
+                context: ctx,
+                cols: self.cols,
+                rows: self.rows,
+            };
             rs.run_now(&self.world);
         }
         Ok(())
@@ -70,11 +91,11 @@ pub fn initialize_level(world: &mut World) -> (u8, u8) {
     const MAP: &str = "
     N N W W W W W W
     W W W . . . . W
-    W . . . B . . W
+    W . . . BR BB . W
     W . . . . . . W
     W . P . . . . W
     W . . . . . . W
-    W . . S . . . W
+    W . . SR SB . . W
     W . . . . . . W
     W W W W W W W W
     ";
@@ -91,16 +112,33 @@ pub fn main() -> GameResult {
     // Create a game context and event loop
     let context_builder = ggez::ContextBuilder::new("rust_sokoban", "sokoban")
         .window_setup(conf::WindowSetup::default().title("Rust Sokoban!"))
-        .window_mode(
-            conf::WindowMode::default()
-                .dimensions(cols as f32 * TILE_WIDTH * MULTIPLIER, ((rows as f32 * TILE_WIDTH) + (TEXT_SIZE + TEXT_PADDING) * 2.0) * MULTIPLIER),
-        )
+        .window_mode(conf::WindowMode::default().dimensions(
+            cols as f32 * TILE_WIDTH * MULTIPLIER,
+            ((rows as f32 * TILE_WIDTH) + (TEXT_SIZE + TEXT_PADDING) * 2.0) * MULTIPLIER,
+        ))
         .add_resource_path(path::PathBuf::from("./resources"));
 
-    let (context, event_loop) = context_builder.build()?;
+    let (mut context, event_loop) = context_builder.build()?;
 
+    let dispatcher = DispatcherBuilder::new()
+        .with(
+            InputSystem {
+                cols: cols,
+                rows: rows,
+            },
+            "input",
+            &[],
+        )
+        .with(GameplayStateSystem {}, "gameplay", &[])
+        .build();
+    initialize_sounds(&mut world, &mut context);
     // Create the game state
-    let game = Game { world, rows, cols };
+    let game = Game {
+        world,
+        dispatcher,
+        rows,
+        cols,
+    };
     // Run the main event loop
     event::run(context, event_loop, game)
 }

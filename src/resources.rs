@@ -1,12 +1,15 @@
 // resources.rs
+use crate::audio::AudioStore;
+use crate::events::*;
 use ggez::event::KeyCode;
-use specs::{World};
+use specs::World;
 use std::fmt::{self, Display};
+use std::time::Duration;
 
 // Resources
 pub enum GameplayState {
     Playing,
-    Won
+    Won,
 }
 impl Default for GameplayState {
     fn default() -> Self {
@@ -22,21 +25,34 @@ pub struct InputQueue {
 #[derive(Default)]
 pub struct Gameplay {
     pub state: GameplayState,
-    pub moves_count: u32
+    pub moves_count: u32,
 }
 
 impl Display for GameplayState {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt.write_str(match self {
             GameplayState::Playing => "Playing",
-            GameplayState::Won => "Won"
+            GameplayState::Won => "Won",
         })?;
         Ok(())
     }
+}
+
+#[derive(Default)]
+pub struct Time {
+    pub delta: Duration,
+}
+
+#[derive(Default)]
+pub struct EventQueue {
+    pub events: Vec<Event>,
 }
 
 // Registering resources
 pub fn register_resources(world: &mut World) {
     world.insert(InputQueue::default());
     world.insert(Gameplay::default());
+    world.insert(Time::default());
+    world.insert(EventQueue::default());
+    world.insert(AudioStore::default());
 }

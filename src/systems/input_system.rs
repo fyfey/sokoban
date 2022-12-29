@@ -1,6 +1,6 @@
 use crate::components::*;
-use crate::constants::*;
-use crate::resources::{Gameplay, InputQueue};
+use crate::events::{EntityMoved, Event};
+use crate::resources::{EventQueue, Gameplay, InputQueue};
 use ggez::event::KeyCode;
 use specs::{world::Index, Entities, Join, ReadStorage, System, Write, WriteStorage};
 use std::collections::HashMap;
@@ -13,6 +13,7 @@ pub struct InputSystem {
 impl<'a> System<'a> for InputSystem {
     // Data
     type SystemData = (
+        Write<'a, EventQueue>,
         Write<'a, InputQueue>,
         Write<'a, Gameplay>,
         Entities<'a>,
@@ -23,7 +24,16 @@ impl<'a> System<'a> for InputSystem {
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (mut input_queue, mut gameplay, entities, mut positions, players, movables, immovables) = data;
+        let (
+            mut event_queue,
+            mut input_queue,
+            mut gameplay,
+            entities,
+            mut positions,
+            players,
+            movables,
+            immovables,
+        ) = data;
         let mut to_move = Vec::new();
 
         for (position, _player) in (&positions, &players).join() {
@@ -70,7 +80,10 @@ impl<'a> System<'a> for InputSystem {
                             // if it exists, we need to stop and not move anything
                             // if it doesn't exist, we stop because we found a gap
                             match immov.get(&pos) {
-                                Some(_id) => to_move.clear(),
+                                Some(_id) => {
+                                    to_move.clear();
+                                    event_queue.events.push(Event::PlayerHitObstacle)
+                                }
                                 None => break,
                             }
                         }
@@ -79,8 +92,8 @@ impl<'a> System<'a> for InputSystem {
             }
         }
         // Now actually move what needs to be moved
-	if to_move.len() > 0 {
-	    gameplay.moves_count += 1;
+        if to_move.len() > 0 {
+            gameplay.moves_count += 1;
         }
         for (key, id) in to_move {
             let position = positions.get_mut(entities.entity(id));
@@ -93,6 +106,10 @@ impl<'a> System<'a> for InputSystem {
                     _ => (),
                 }
             }
+
+            event_queue
+                .events
+                .push(Event::EntityMoved(EntityMoved { id: id }));
         }
     }
 }
